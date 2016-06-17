@@ -77,7 +77,7 @@ func (client *DataRecorder) OnTick(tick *BfTickData) {
 		log.Printf("%v", bar)
 		client.InsertBar(bar)
 
-		// 基于M01生成其他Min的Bar
+		// 基于M01生成其他周期的Bar
 		for i := range periodKeyList {
 			if ret, needInsert := client.bars.UpdateMxHDW(id, bar, periodKeyList[i]); needInsert {
 				log.Printf("Insert %v bar [%s]", periodKeyList[i], tick.TickTime)
@@ -85,11 +85,9 @@ func (client *DataRecorder) OnTick(tick *BfTickData) {
 				for j := range ret {
 					client.InsertBar(ret[j])
 				}
-
 			}
 		}
 	}
-
 }
 
 func (client *DataRecorder) OnError(resp *BfErrorData) {
@@ -130,8 +128,8 @@ func main() {
 		tickHandler:   true,
 		tradeHandler:  false,
 		logHandler:    false,
-		symbol:        "rb1610",                                                       //rb1610",
-		exchange:      "SHFE",                                                         //"SHFE",
+		symbol:        "*",                                                            //rb1610",
+		exchange:      "*",                                                            //"SHFE",
 		bars:          &Bars{data: make(map[string]*BarSlice), contractInited: false}} //SHFE"}
 
 	BfRun(client,

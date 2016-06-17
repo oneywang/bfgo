@@ -172,7 +172,7 @@ func (p *Bars) UpdatM01(id string, tick *BfTickData) (*BfBarData, bool) {
 			needInsert = true
 			ret = storedBar
 			// 用tick初始化一个新的currentBar
-			(*bm01)[BfBarPeriod_PERIOD_M01] = Tick2M01(tick)
+			(*bm01)[BfBarPeriod_PERIOD_M01] = Tick2M01(tick) //FIXME：直接用storedBar = Tick.. 不行！不知道为什么！
 		}
 	}
 
@@ -210,7 +210,7 @@ func (p *Bars) UpdateMxHDW(id string, bar *BfBarData, period BfBarPeriod) ([]*Bf
 		}
 		if isSamePeriod {
 			// 还在同一个周期中，更新即可
-			storedBar.BarTime = bar.BarTime
+			storedBar.BarTime = bar.BarTime //TODO：一分钟的可以，这里是否也一定可以？
 			storedBar.Volume = bar.Volume
 			storedBar.OpenInterest = bar.OpenInterest
 			storedBar.LastVolume += bar.LastVolume
