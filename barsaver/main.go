@@ -3,17 +3,15 @@ package main
 //##############Readme#########################
 //1.从gw读取TICK合并成分钟BAR存入datafeed！
 //2.支持多品种，支持*全品种。
-//3.支持多周期：1分钟，3，5，10，15，30分钟。
-//4.尚不支持的周期：小时，日，周，月，年。
+//3.支持多周期：1分钟，3，5，10，15，30分钟，小时，日。
+//4.尚不支持的周期：周，月，年。
 //5.尚不支持数据有效性、完整性检验--待回测gw可以喂历史数据后做。
 
 import (
 	"log"
-	"math"
 )
 import . "github.com/sunwangme/bfgo/bftraderclient"
 import . "github.com/sunwangme/bfgo/api/bfgateway"
-import . "github.com/sunwangme/bfgo/api/bfdatafeed"
 
 //======
 type DataRecorder struct {
@@ -37,21 +35,17 @@ func insertContracts(client *DataRecorder) {
 //======
 func (client *DataRecorder) OnStart() {
 	log.Printf("OnStart")
-}
-func (client *DataRecorder) OnTradeWillBegin(resp *BfNotificationData) {
-	log.Printf("OnTradeWillBegin")
-	log.Printf("%v", resp)
-}
-
-func (client *DataRecorder) OnGotContracts(resp *BfNotificationData) {
-	log.Printf("OnGotContracts")
-	log.Printf("%v", resp)
-
+	// 策略每次连接上gw会收到，是做初始化的一个时机。
 	//
 	// save contracts
 	//
 	client.bars.contractInited = true
 	insertContracts(client)
+}
+func (client *DataRecorder) OnNotification(resp *BfNotificationData) {
+	// 连接上gw，对于一些重要的事件，gw会发通知，便于策略控制逻辑。
+	log.Printf("OnNotification")
+	log.Printf("%v", resp)
 }
 func (client *DataRecorder) OnPing(resp *BfPingData) {
 	return
@@ -78,42 +72,24 @@ func (client *DataRecorder) OnTick(tick *BfTickData) {
 	id := tick.Symbol + "@" + tick.Exchange
 	// tickDatetime = datetime.strptime(tick.actionDate+tick.tickTime,"%Y%m%d%H:%M:%S.%f")
 
-	bar := client.bars.GetBar(id, BfBarPeriod_PERIOD_M01)
-	if bar == nil {
-		bar = &BfBarData{}
-		Tick2Bar(tick, BfBarPeriod_PERIOD_M01, bar)
-		client.bars.SetBar(id, bar, BfBarPeriod_PERIOD_M01)
-		return
-	}
-
-	//print "update bar for: " + id
-	//log.Printf("update bar %v", bar)
-	if Bartime2Minute(Ticktime2Bartime(tick.TickTime)) != Bartime2Minute(bar.BarTime) {
-		// 过去的一个bar存入datafeed
+	if bar, needInsert := client.bars.UpdatM01(id, tick); needInsert {
 		log.Printf("Insert 1min bar [%s]", tick.TickTime)
 		log.Printf("%v", bar)
 		client.InsertBar(bar)
 
 		// 基于M01生成其他Min的Bar
 		for i := range periodKeyList {
-			if xbar, needInsert := client.bars.M01ToMxx(id, bar, periodKeyList[i]); needInsert {
+			if ret, needInsert := client.bars.UpdateMxHDW(id, bar, periodKeyList[i]); needInsert {
 				log.Printf("Insert %v bar [%s]", periodKeyList[i], tick.TickTime)
-				log.Printf("%v", xbar)
-				client.InsertBar(xbar)
+				log.Printf("%v", ret)
+				for j := range ret {
+					client.InsertBar(ret[j])
+				}
+
 			}
 		}
-
-		// 初始化一个新的k线
-		Tick2Bar(tick, BfBarPeriod_PERIOD_M01, bar)
-	} else {
-		// 继续累加当前K线
-		bar.HighPrice = math.Max(bar.HighPrice, tick.LastPrice)
-		bar.LowPrice = math.Min(bar.LowPrice, tick.LastPrice)
-		bar.ClosePrice = tick.LastPrice
-		bar.Volume = tick.Volume
-		bar.OpenInterest = tick.OpenInterest
-		bar.LastVolume += tick.LastVolume
 	}
+
 }
 
 func (client *DataRecorder) OnError(resp *BfErrorData) {
@@ -154,8 +130,8 @@ func main() {
 		tickHandler:   true,
 		tradeHandler:  false,
 		logHandler:    false,
-		symbol:        "*",                                                            //rb1610",
-		exchange:      "*",                                                            //"SHFE",
+		symbol:        "rb1610",                                                       //rb1610",
+		exchange:      "SHFE",                                                         //"SHFE",
 		bars:          &Bars{data: make(map[string]*BarSlice), contractInited: false}} //SHFE"}
 
 	BfRun(client,

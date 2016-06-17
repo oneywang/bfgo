@@ -262,21 +262,14 @@ func cover(client *DualCross, price float64, volume int32) {
 //======
 func (client *DualCross) OnStart() {
 	log.Printf("OnStart")
+	// 策略每次连接上gw会收到，是做初始化的一个时机。
+
 	// 发出获取当前仓位请求
 	client.QueryPosition()
-
 }
-func (client *DualCross) OnTradeWillBegin(resp *BfNotificationData) {
-	// 盘前启动策略，能收到这个消息，而且是第一个消息
-	// TODO：这里是做初始化的一个时机
-	log.Printf("OnTradeWillBegin")
-	log.Printf("%v", resp)
-}
-
-func (client *DualCross) OnGotContracts(resp *BfNotificationData) {
-	// 盘前启动策略，能收到这个消息，是第二个消息
-	// TODO：这里是做初始化的一个时机
-	log.Printf("OnGotContracts")
+func (client *DualCross) OnNotification(resp *BfNotificationData) {
+	// 连接上gw，对于一些重要的事件，gw会发通知，便于策略控制逻辑。
+	log.Printf("OnNotification")
 	log.Printf("%v", resp)
 }
 func (client *DualCross) OnPing(resp *BfPingData) {
