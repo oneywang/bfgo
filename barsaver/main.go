@@ -4,12 +4,10 @@ package main
 //1.从gw读取TICK合并成分钟BAR存入datafeed！
 //2.支持多品种，支持*全品种。
 //3.支持多周期：1分钟，3，5，10，15，30分钟，小时，日。
-//4.尚不支持的周期：周，月，年。
+//4.不支持的周期：周，月，年。
 //5.尚不支持数据有效性、完整性检验--待回测gw可以喂历史数据后做。
 
-import (
-	"log"
-)
+import "log"
 import . "github.com/sunwangme/bfgo/bftraderclient"
 import . "github.com/sunwangme/bfgo/api/bfgateway"
 
@@ -72,20 +70,12 @@ func (client *DataRecorder) OnTick(tick *BfTickData) {
 	id := tick.Symbol + "@" + tick.Exchange
 	// tickDatetime = datetime.strptime(tick.actionDate+tick.tickTime,"%Y%m%d%H:%M:%S.%f")
 
-	if bar, needInsert := client.bars.UpdatM01(id, tick); needInsert {
-		log.Printf("Insert 1min bar [%s]", tick.TickTime)
-		log.Printf("%v", bar)
-		client.InsertBar(bar)
-
-		// 基于M01生成其他周期的Bar
-		for i := range periodKeyList {
-			if ret, needInsert := client.bars.UpdateMxHDW(id, bar, periodKeyList[i]); needInsert {
-				log.Printf("Insert %v bar [%s]", periodKeyList[i], tick.TickTime)
-				log.Printf("%v", ret)
-				for j := range ret {
-					client.InsertBar(ret[j])
-				}
-			}
+	for i := range periodKeyList {
+		// 基于tick生成Bar，并在得到完整bar时插入db
+		if bar, needInsert := client.bars.Tick2Bar(id, tick, periodKeyList[i]); needInsert {
+			log.Printf("Insert %v bar [%s]", periodKeyList[i], tick.TickTime)
+			log.Printf("%v", bar)
+			client.InsertBar(bar)
 		}
 	}
 }
