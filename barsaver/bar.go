@@ -13,10 +13,7 @@ import . "github.com/sunwangme/bfgo/api/bfdatafeed"
 var periodKeyList = []BfBarPeriod{
 	BfBarPeriod_PERIOD_M01,
 	BfBarPeriod_PERIOD_M03,
-	BfBarPeriod_PERIOD_M05,
-	BfBarPeriod_PERIOD_M10,
 	BfBarPeriod_PERIOD_M15,
-	BfBarPeriod_PERIOD_M30,
 	BfBarPeriod_PERIOD_H01,
 	BfBarPeriod_PERIOD_D01}
 
@@ -58,10 +55,7 @@ func bartime2Minute(t string) int32 {
 var periodMinutesList = map[BfBarPeriod]int32{
 	BfBarPeriod_PERIOD_M01: 1,
 	BfBarPeriod_PERIOD_M03: 3,
-	BfBarPeriod_PERIOD_M05: 5,
-	BfBarPeriod_PERIOD_M10: 10,
-	BfBarPeriod_PERIOD_M15: 15,
-	BfBarPeriod_PERIOD_M30: 30}
+	BfBarPeriod_PERIOD_M15: 15}
 
 // 输入："%H:%M:%S"，
 // 输出：M值每个周期的整分钟值
@@ -187,7 +181,7 @@ func (p *Bars) Tick2Bar(id string, tick *BfTickData, period BfBarPeriod) (*BfBar
 			UpdateBarFromTick(storedBar, tick)
 		} else {
 			// 新的周期开始，需要返回这个完整bar以便插入db，同时生成新周期的bar
-			log.Print("not same 1min: insert and update")
+			log.Print("not same period: insert and update")
 			needInsert = true
 			ret = storedBar
 			// 用tick初始化一个新的currentBar
