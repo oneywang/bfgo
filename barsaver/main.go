@@ -10,6 +10,7 @@ package main
 import "log"
 import . "github.com/sunwangme/bfgo/bftraderclient"
 import . "github.com/sunwangme/bfgo/api/bfgateway"
+import "github.com/sunwangme/bfgo/oneywang/bar"
 
 //======
 type DataRecorder struct {
@@ -20,7 +21,7 @@ type DataRecorder struct {
 	logHandler   bool
 	symbol       string
 	exchange     string
-	bars         *Bars
+	converter    *bar.Converter
 }
 
 func insertContracts(client *DataRecorder) {
@@ -35,9 +36,9 @@ func (client *DataRecorder) OnStart() {
 	log.Printf("OnStart")
 	// 策略每次连接上gw会收到，是做初始化的一个时机。
 	//
-	// save contracts
-	//
-	client.bars.contractInited = true
+	// 要把contract保存到datafeed里面才会看到数据
+	// ongotcontracts只有ctpgateway连接上ctp时候才发，所有盘中策略连接ctpgateway时候，是没有这个信息的。
+	// 可以手工把ctpgateway ctp-stop然后ctp-start以下，就可以得到这个消息。我们这里程序自动判断如果没有调用则主动调用一次。
 	insertContracts(client)
 }
 func (client *DataRecorder) OnNotification(resp *BfNotificationData) {
@@ -59,21 +60,15 @@ func (client *DataRecorder) OnTick(tick *BfTickData) {
 	//
 	client.InsertTick(tick)
 
-	// 要把contract保存到datafeed里面才会看到数据
-	// ongotcontracts只有ctpgateway连接上ctp时候才发，所有盘中策略连接ctpgateway时候，是没有这个信息的。
-	// 可以手工把ctpgateway ctp-stop然后ctp-start以下，就可以得到这个消息。我们这里程序自动判断如果没有调用则主动调用一次。
-	if client.bars.contractInited == false {
-		client.bars.contractInited = true
-		insertContracts(client)
-	}
 	// 计算K线
-	id := tick.Symbol + "@" + tick.Exchange
+
 	// tickDatetime = datetime.strptime(tick.actionDate+tick.tickTime,"%Y%m%d%H:%M:%S.%f")
 
-	for i := range periodKeyList {
+	for i := range bar.PeriodKeyList {
 		// 基于tick生成Bar，并在得到完整bar时插入db
-		if bar, needInsert := client.bars.Tick2Bar(id, tick, periodKeyList[i]); needInsert {
-			log.Printf("Insert %v bar [%s]", periodKeyList[i], tick.TickTime)
+		period := bar.PeriodKeyList[i]
+		if bar, needInsert := client.converter.Tick2Bar(tick, period); needInsert {
+			log.Printf("Insert %v bar [%s]", period, tick.TickTime)
 			log.Printf("%v", bar)
 			client.InsertBar(bar)
 		}
@@ -118,9 +113,9 @@ func main() {
 		tickHandler:   true,
 		tradeHandler:  false,
 		logHandler:    false,
-		symbol:        "*",                                                            //rb1610",
-		exchange:      "*",                                                            //"SHFE",
-		bars:          &Bars{data: make(map[string]*BarSlice), contractInited: false}} //SHFE"}
+		symbol:        "*", //rb1610",
+		exchange:      "*", //"SHFE",
+		converter:     bar.NewConverter()}
 
 	BfRun(client,
 		client.clientId,

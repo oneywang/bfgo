@@ -2,23 +2,15 @@ package main
 
 import (
 	"log"
-	"math"
-	"time"
+	//"math"
+	//"time"
 )
 import . "github.com/sunwangme/bfgo/api/bfgateway"
 import . "github.com/sunwangme/bfgo/api/bfdatafeed"
-import "github.com/go-talib"
 
-// 支持这些周期的bar计算
-var periodKeyList = []BfBarPeriod{
-	BfBarPeriod_PERIOD_M01,
-	BfBarPeriod_PERIOD_M03,
-	BfBarPeriod_PERIOD_M15,
-	BfBarPeriod_PERIOD_H01}
-var periodMinutesList = map[BfBarPeriod]int32{
-	BfBarPeriod_PERIOD_M01: 1,
-	BfBarPeriod_PERIOD_M03: 3,
-	BfBarPeriod_PERIOD_M15: 15}
+//import "github.com/go-talib"
+
+type DataFrames map[BfBarPeriod]*DataFrame
 
 type DataFrame struct {
 	// 不同品种K线
@@ -38,6 +30,7 @@ func newDataframe(p BfBarPeriod, t string) *DataFrame {
 func (p *DataFrame) appendBar(b *BfBarData) {
 	p.bars = append(p.bars, b)
 	//TODO
+	log.Print("new bar")
 }
 
 //增加一行数据，同时计算macd ma15/30/60；
@@ -62,7 +55,7 @@ func (p *DataFrame) bar(index int) (*BfBarData, bool) {
 		ret = p.bars[index]
 		ok = true
 	}
-	return ret, true
+	return ret, ok
 }
 
 //获取最新macd,priceType是OHCL一种

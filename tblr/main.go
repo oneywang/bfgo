@@ -49,34 +49,18 @@ package main
 
 import (
 	"log"
-	"strconv"
-	"strings"
 	"time"
 )
 import . "github.com/sunwangme/bfgo/bftraderclient"
 import . "github.com/sunwangme/bfgo/api/bfgateway"
 import . "github.com/sunwangme/bfgo/api/bfdatafeed"
+import "github.com/sunwangme/bfgo/oneywang/bar"
 
-// 本策略的交易参数常量
-const (
-	TRADE_VOLUME int32  = 1
-	VOLUME_LIMIT int32  = 5
-	FAST_K_NUM   uint32 = 15
-	SLOW_K_NUM   uint32 = 60
-)
-
-// 本策略的变量
-var _period BfBarPeriod = BfBarPeriod_PERIOD_M01
-var _historyBarsGot bool = false
-var _barsCount uint32 = 0
-var _currentBarMinute uint32 = 0
-var _fastMa, _slowMa []float64
-var _fastMa0, _fastMa1, _slowMa0, _slowMa1 float64 = 0, 0, 0, 0
-var _positionLong, _positionShort int32 = 0, 0
-var _pendingOrderIds []string
+var converter *bar.Converter = bar.NewConverter()
+var dataframes DataFrames
 
 //======
-type DualCross struct {
+type TradeClient struct {
 	*BfTrderClient
 	clientId     string
 	tickHandler  bool
@@ -86,152 +70,9 @@ type DualCross struct {
 	exchange     string
 }
 
-// "%H:%M:%S.%f"==>"%H:%M:%S"
-func ticktime2bartime(t string) string {
-	var b string
-	if dot := strings.LastIndex(t, "."); dot >= 0 {
-		b = t[:dot]
-	} else {
-		log.Fatalf("Failed ticktime2bartime : %s", t)
-	}
-	return b
-}
-
-func bartime2minute(t string) uint32 {
-	var m uint32
-	if strings.Count(t, ":") != 2 {
-		log.Fatalf("Failed bartime2minute : %s", t)
-	}
-	start := strings.Index(t, ":")
-	stop := strings.LastIndex(t, ":")
-	if stop > start {
-		i, err := strconv.Atoi(t[start+1 : stop])
-		if err != nil {
-			log.Fatalf("Failed bartime2minute : %s, %v", t, err)
-		} else {
-			m = uint32(i)
-		}
-	}
-	return m
-}
-
-// 用Tick数据赋值Bar
-func tick2bar(t *BfTickData, period BfBarPeriod, b *BfBarData) {
-	b.Symbol = t.Symbol
-	b.Exchange = t.Exchange
-	b.Period = period
-
-	b.ActionDate = t.ActionDate
-	b.BarTime = ticktime2bartime(t.TickTime) //TODO: "%H:%M:%S.%f"==>"%H:%M:%S"
-	b.Volume = t.Volume
-	b.OpenInterest = t.OpenInterest
-	b.LastVolume = t.LastVolume
-
-	b.OpenPrice = t.LastPrice
-	b.HighPrice = t.LastPrice
-	b.LowPrice = t.LastPrice
-	b.ClosePrice = t.LastPrice
-}
-
-func initPosition(position *BfPositionData) {
-	if _positionLong > 0 || _positionShort > 0 {
-		// already inited
-		return
-	}
-	if position.Direction == BfDirection_DIRECTION_LONG {
-		_positionLong += position.Position
-	} else if position.Direction == BfDirection_DIRECTION_SHORT {
-		_positionShort += position.Position
-	}
-}
-
-func updatePosition(direction BfDirection, offset BfOffset, volume int32) {
-	if direction == BfDirection_DIRECTION_LONG && offset == BfOffset_OFFSET_OPEN {
-		_positionLong += volume
-	} else if direction == BfDirection_DIRECTION_LONG && offset == BfOffset_OFFSET_CLOSE {
-		_positionLong -= volume
-	} else if direction == BfDirection_DIRECTION_SHORT && offset == BfOffset_OFFSET_OPEN {
-		_positionShort += volume
-	} else if direction == BfDirection_DIRECTION_SHORT && offset == BfOffset_OFFSET_CLOSE {
-		_positionShort -= volume
-	}
-}
-
-func indexOf(a []string, v string) int {
-	for i := range a {
-		if a[i] == v {
-			return i
-		}
-	}
-	return -1
-}
-
-func without(a []string, v string) []string {
-	var r []string
-	j := 0
-	for i := range a {
-		if a[i] != v {
-			r[j] = a[i]
-			j++
-		}
-	}
-	return r
-}
-
-func onBar(client *DualCross, closePrice float64) {
-	// 计算快慢均线
-	if 0 == _fastMa0 {
-		_fastMa0 = closePrice
-	} else {
-		_fastMa1 = _fastMa0
-		_fastMa0 = (closePrice + _fastMa0*float64(FAST_K_NUM-1)) / float64(FAST_K_NUM)
-	}
-	_fastMa = append(_fastMa, _fastMa0)
-
-	if 0 == _slowMa0 {
-		_slowMa0 = closePrice
-	} else {
-		_slowMa1 = _slowMa0
-		_slowMa0 = (closePrice + _slowMa0*float64(SLOW_K_NUM-1)) / float64(SLOW_K_NUM)
-	}
-	_slowMa = append(_slowMa, _slowMa0)
-
-	// 判断是否足够bar--初始化时会去历史，如果历史不够，会积累到至少  SLOW_K_NUM 数量的bar才会交易
-	_barsCount += 1
-	log.Printf("bar count: %d", _barsCount)
-	if _barsCount < SLOW_K_NUM {
-		return
-	}
-
-	// 判断买卖
-	crossOver := _fastMa0 > _slowMa0 && _fastMa1 < _slowMa1  // 金叉上穿
-	crossBelow := _fastMa0 < _slowMa0 && _fastMa1 > _slowMa1 // 死叉下穿
-
-	if crossOver {
-		// 金叉
-		// 1.如果有空头持仓，则先平仓
-		if _positionShort > 0 {
-			cover(client, closePrice, _positionShort)
-		}
-		// 2.持仓未到上限，则继续做多
-		if _positionLong < VOLUME_LIMIT {
-			buy(client, closePrice, TRADE_VOLUME)
-		}
-	} else if crossBelow {
-		// 死叉
-		// 1.如果有多头持仓，则先平仓
-		if _positionLong > 0 {
-			sell(client, closePrice, _positionLong)
-		}
-		// 2.持仓未到上限，则继续做空
-		if _positionShort < VOLUME_LIMIT {
-			short(client, closePrice, TRADE_VOLUME)
-		}
-	}
-}
-
-func buy(client *DualCross, price float64, volume int32) {
+func buy(client *TradeClient, price float64, volume int32) string {
 	log.Printf("%v", time.Now())
+	log.Printf("To Buy: price=%10.3f vol=%d", price, volume)
 	resp, err := client.SendOrder(&BfSendOrderReq{
 		Symbol:    client.symbol,
 		Exchange:  client.exchange,
@@ -242,14 +83,14 @@ func buy(client *DualCross, price float64, volume int32) {
 		Offset:    BfOffset_OFFSET_OPEN})
 	if err != nil {
 		log.Fatal("Buy error")
-	} else {
-		log.Printf("Buy: price=%10.3f vol=%d", price, volume)
-		_pendingOrderIds = append(_pendingOrderIds, resp.BfOrderId)
 	}
+
+	return resp.BfOrderId
 }
 
-func sell(client *DualCross, price float64, volume int32) {
+func sell(client *TradeClient, price float64, volume int32) string {
 	log.Printf("%v", time.Now())
+	log.Printf("To sell: price=%10.3f vol=%d", price, volume)
 	resp, err := client.SendOrder(&BfSendOrderReq{
 		Symbol:    client.symbol,
 		Exchange:  client.exchange,
@@ -260,14 +101,14 @@ func sell(client *DualCross, price float64, volume int32) {
 		Offset:    BfOffset_OFFSET_CLOSETODAY})
 	if err != nil {
 		log.Fatal("sell error")
-	} else {
-		log.Printf("sell: price=%10.3f vol=%d", price, volume)
-		_pendingOrderIds = append(_pendingOrderIds, resp.BfOrderId)
 	}
+
+	return resp.BfOrderId
 }
 
-func short(client *DualCross, price float64, volume int32) {
+func short(client *TradeClient, price float64, volume int32) string {
 	log.Printf("%v", time.Now())
+	log.Printf("short: price=%10.3f vol=%d", price, volume)
 	resp, err := client.SendOrder(&BfSendOrderReq{
 		Symbol:    client.symbol,
 		Exchange:  client.exchange,
@@ -278,14 +119,13 @@ func short(client *DualCross, price float64, volume int32) {
 		Offset:    BfOffset_OFFSET_OPEN})
 	if err != nil {
 		log.Fatal("short error")
-	} else {
-		log.Printf("short: price=%10.3f vol=%d", price, volume)
-		_pendingOrderIds = append(_pendingOrderIds, resp.BfOrderId)
 	}
+	return resp.BfOrderId
 }
 
-func cover(client *DualCross, price float64, volume int32) {
+func cover(client *TradeClient, price float64, volume int32) string {
 	log.Printf("%v", time.Now())
+	log.Printf("To cover: price=%10.3f vol=%d", price, volume)
 	resp, err := client.SendOrder(&BfSendOrderReq{
 		Symbol:    client.symbol,
 		Exchange:  client.exchange,
@@ -296,78 +136,80 @@ func cover(client *DualCross, price float64, volume int32) {
 		Offset:    BfOffset_OFFSET_CLOSETODAY})
 	if err != nil {
 		log.Fatal("cover error")
-	} else {
-		log.Printf("cover: price=%10.3f vol=%d", price, volume)
-		_pendingOrderIds = append(_pendingOrderIds, resp.BfOrderId)
 	}
+	return resp.BfOrderId
 }
 
 //======
-func (client *DualCross) OnStart() {
+func (client *TradeClient) OnStart() {
 	log.Printf("OnStart")
 	// 发出获取当前仓位请求
 	client.QueryPosition()
+	// 获取历史bar
+	for i := range bar.PeriodKeyList {
+		// 基于tick生成Bar，并在得到完整bar时插入db
+		period := bar.PeriodKeyList[i]
+		t := time.Now().String()
+		dataframes[period] = newDataframe(period, t)
+		log.Printf("load histroy bars")
+		bars, err := client.GetBar(&BfGetBarReq{
+			Symbol:   client.symbol,
+			Exchange: client.exchange,
+			Period:   period,
+			ToDate:   "",
+			ToTime:   "",
+			Count:    int32(SLOW_K_NUM - 1)}) //确保本策略启动后至少1分钟后才开始交易
+		if err != nil {
+			for i := range bars {
+				dataframes[period].appendBar(bars[i])
+			}
+		}
+	}
 
 }
-func (client *DualCross) OnTradeWillBegin(resp *BfNotificationData) {
+func (client *TradeClient) OnTradeWillBegin(resp *BfNotificationData) {
 	// 盘前启动策略，能收到这个消息，而且是第一个消息
 	// TODO：这里是做初始化的一个时机
 	log.Printf("OnTradeWillBegin")
 	log.Printf("%v", resp)
 }
 
-func (client *DualCross) OnGotContracts(resp *BfNotificationData) {
+func (client *TradeClient) OnGotContracts(resp *BfNotificationData) {
 	// 盘前启动策略，能收到这个消息，是第二个消息
 	// TODO：这里是做初始化的一个时机
 	log.Printf("OnGotContracts")
 	log.Printf("%v", resp)
 }
-func (client *DualCross) OnPing(resp *BfPingData) {
+func (client *TradeClient) OnPing(resp *BfPingData) {
 	log.Printf("OnPing")
 	log.Printf("%v", resp)
 }
-func (client *DualCross) OnTick(tick *BfTickData) {
+func (client *TradeClient) OnTick(tick *BfTickData) {
 	//log.Printf("OnTick")
 	//log.Printf("%v", tick)
-
-	tickMinute := bartime2minute(ticktime2bartime(tick.TickTime))
-	if !_historyBarsGot {
-		log.Printf("load histroy bars")
-		_historyBarsGot = true
-		bars, err := client.GetBar(&BfGetBarReq{
-			Symbol:   client.symbol,
-			Exchange: client.exchange,
-			Period:   _period,
-			ToDate:   tick.ActionDate,
-			ToTime:   tick.TickTime,
-			Count:    int32(SLOW_K_NUM - 1)}) //确保本策略启动后至少1分钟后才开始交易
-		if err == nil {
-			for i := range bars {
-				onBar(client, bars[i].ClosePrice)
-			}
+	for i := range bar.PeriodKeyList {
+		// 基于tick生成Bar，并在得到完整bar时插入db
+		period := bar.PeriodKeyList[i]
+		bar, isNew := converter.Tick2Bar(tick, period)
+		log.Printf("Insert %v bar [%s]", period, tick.TickTime)
+		log.Printf("%v", bar)
+		if isNew {
+			// TODO: 买还是卖？
 		}
-		_currentBarMinute = tickMinute
-		return
 	}
 
-	if tickMinute != _currentBarMinute {
-		// 每一新分钟得到K线
-		// 因为只用到了bar.closePrice，所以不必再去datafeed取K线
-		onBar(client, tick.LastPrice)
-		_currentBarMinute = tickMinute
-	}
 }
 
-func (client *DualCross) OnError(resp *BfErrorData) {
+func (client *TradeClient) OnError(resp *BfErrorData) {
 	log.Printf("OnError")
 	log.Printf("%v", resp)
 
 }
-func (client *DualCross) OnLog(resp *BfLogData) {
+func (client *TradeClient) OnLog(resp *BfLogData) {
 	log.Printf("OnLog")
 	log.Printf("%v", resp)
 }
-func (client *DualCross) OnTrade(resp *BfTradeData) {
+func (client *TradeClient) OnTrade(resp *BfTradeData) {
 	// 挂单的成交
 	log.Printf("OnTrade")
 	log.Printf("%v", resp)
@@ -384,12 +226,12 @@ func (client *DualCross) OnTrade(resp *BfTradeData) {
 	_pendingOrderIds = without(_pendingOrderIds, resp.BfOrderId)
 	updatePosition(resp.Direction, resp.Offset, resp.Volume)
 }
-func (client *DualCross) OnOrder(resp *BfOrderData) {
+func (client *TradeClient) OnOrder(resp *BfOrderData) {
 	log.Printf("OnOrder")
 	log.Printf("%v", resp)
 	// 挂单的中间状态，一般只需要在OnTrade里面处理。
 }
-func (client *DualCross) OnPosition(resp *BfPositionData) {
+func (client *TradeClient) OnPosition(resp *BfPositionData) {
 	log.Printf("OnPosition")
 	log.Printf("%v", resp)
 	// ?resp不是个数组吗？
@@ -397,11 +239,11 @@ func (client *DualCross) OnPosition(resp *BfPositionData) {
 		initPosition(resp)
 	}
 }
-func (client *DualCross) OnAccount(resp *BfAccountData) {
+func (client *TradeClient) OnAccount(resp *BfAccountData) {
 	log.Printf("OnAccount")
 	log.Printf("%v", resp)
 }
-func (client *DualCross) OnStop() {
+func (client *TradeClient) OnStop() {
 	log.Printf("OnStop, cancle all pending orders")
 	// 退出前，把挂单都撤了
 	req := &BfCancelOrderReq{Symbol: client.symbol, Exchange: client.exchange}
@@ -413,7 +255,7 @@ func (client *DualCross) OnStop() {
 
 //======
 func main() {
-	client := &DualCross{
+	client := &TradeClient{
 		BfTrderClient: NewBfTraderClient(),
 		clientId:      "DualCross",
 		tickHandler:   true,
