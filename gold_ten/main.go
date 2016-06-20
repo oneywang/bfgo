@@ -1,6 +1,6 @@
 package main
 
-//******【Gold Ten】*******
+//******【Gold Ten：金十动力策略】*******
 //1.请手工保证帐号上的钱够！
 //2.本策略还不支持单帐号多实例等复杂场景。
 //3.策略退出时会清除所有挂单。
@@ -34,7 +34,6 @@ import . "github.com/sunwangme/bfgo/api/bfgateway"
 import . "github.com/sunwangme/bfgo/api/bfdatafeed"
 import "github.com/sunwangme/bfgo/oneywang/bar"
 
-var converter *bar.Converter = bar.NewConverter()
 var dataframes DataFrames
 
 //======
@@ -128,7 +127,7 @@ func (client *TradeClient) OnStart() {
 		// 基于tick生成Bar，并在得到完整bar时插入db
 		period := bar.PeriodKeyList[i]
 		t := time.Now().String()
-		dataframes[period] = newDataframe(period, t)
+		dataframes[period] = NewDataframe(period, t)
 		log.Printf("load histroy bars")
 		bars, err := client.GetBar(&BfGetBarReq{
 			Symbol:   client.symbol,
@@ -139,24 +138,18 @@ func (client *TradeClient) OnStart() {
 			Count:    int32(SLOW_K_NUM - 1)}) //确保本策略启动后至少1分钟后才开始交易
 		if err != nil {
 			for i := range bars {
-				dataframes[period].appendBar(bars[i])
+				dataframes[period].AppendBar(bars[i])
 			}
 		}
 	}
-
-}
-func (client *TradeClient) OnTradeWillBegin(resp *BfNotificationData) {
-	// 盘前启动策略，能收到这个消息，而且是第一个消息
-	// TODO：这里是做初始化的一个时机
-	log.Printf("OnTradeWillBegin")
-	log.Printf("%v", resp)
 }
 
-func (client *TradeClient) OnGotContracts(resp *BfNotificationData) {
-	// 盘前启动策略，能收到这个消息，是第二个消息
-	// TODO：这里是做初始化的一个时机
-	log.Printf("OnGotContracts")
+func (client *TradeClient) OnNotification(resp *BfNotificationData) {
+	// 连接上gw，对于一些重要的事件，gw会发通知，便于策略控制逻辑。
+	log.Printf("OnNotification")
 	log.Printf("%v", resp)
+	// OnTradeWillBegin第一个消息
+	// OnGotContracts第二个消息
 }
 func (client *TradeClient) OnPing(resp *BfPingData) {
 	log.Printf("OnPing")
@@ -168,10 +161,10 @@ func (client *TradeClient) OnTick(tick *BfTickData) {
 	for i := range bar.PeriodKeyList {
 		// 基于tick生成Bar，并在得到完整bar时插入db
 		period := bar.PeriodKeyList[i]
-		bar, isNew := converter.Tick2Bar(tick, period)
-		log.Printf("Insert %v bar [%s]", period, tick.TickTime)
-		log.Printf("%v", bar)
-		if isNew {
+		bar, hasNew := dataframes[period].AppendTick(tick)
+		if hasNew {
+			log.Printf("Insert %v bar [%s]", period, tick.TickTime)
+			log.Printf("%v", bar)
 			// TODO: 买还是卖？
 		}
 	}

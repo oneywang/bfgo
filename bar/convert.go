@@ -145,11 +145,45 @@ func NewConverter() *Converter {
 	return r
 }
 
-// 用tick得到某周期的bar
+// 将tick更新到传入的某周期的bar
+// 返回值
+// bool：是否新周期开始
+// *BfBarData：如果新周期开始，返回的是新生成的新周期的bar；否则是空
+func UpdateTick2Bar(tick *BfTickData, bar *BfBarData) (*BfBarData, bool) {
+	var ret *BfBarData = nil
+	isSamePeriod := true
+
+	if tick == nil || bar == nil || bar.Symbol != tick.Symbol || bar.Exchange != tick.Symbol {
+		panic("illegal param")
+	}
+
+	period := bar.Period
+	// 判断是否新的周期
+	if period == BfBarPeriod_PERIOD_D01 {
+		isSamePeriod = bar.ActionDate == tick.ActionDate
+	} else if period == BfBarPeriod_PERIOD_W01 {
+		panic("TODO: WEEK BAR not support")
+	} else {
+		isSamePeriod = isSamePeriodTime(bar.BarTime, ticktime2Bartime(tick.TickTime, period), period)
+	}
+
+	if isSamePeriod {
+		// 还在同一个周期中，更新即可
+		updateBarFromTick(bar, tick)
+	} else {
+		// 新的周期开始，需要生成新周期的bar返回
+		// 用tick初始化一个新的currentBar
+		ret = constructBarFromTick(tick, period)
+	}
+
+	return ret, !isSamePeriod
+}
+
+// 将tick保存到Converter内置的某周期的bar
 // 返回值
 // bool：是否新周期开始
 // *BfBarData：如果新周期开始，返回的是上一周期的bar；否则是更新后的老bar
-func (p *Converter) Tick2Bar(tick *BfTickData, period BfBarPeriod) (*BfBarData, bool) {
+func (p *Converter) SaveTick2Bar(tick *BfTickData, period BfBarPeriod) (*BfBarData, bool) {
 	var ret *BfBarData = nil
 	isNewPeriod := false
 

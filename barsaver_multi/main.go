@@ -67,7 +67,7 @@ func (client *DataRecorder) OnTick(tick *BfTickData) {
 	for i := range bar.PeriodKeyList {
 		// 基于tick生成Bar，并在得到完整bar时插入db
 		period := bar.PeriodKeyList[i]
-		if bar, needInsert := client.converter.Tick2Bar(tick, period); needInsert {
+		if bar, needInsert := client.converter.SaveTick2Bar(tick, period); needInsert {
 			log.Printf("Insert %v bar [%s]", period, tick.TickTime)
 			log.Printf("%v", bar)
 			client.InsertBar(bar)
