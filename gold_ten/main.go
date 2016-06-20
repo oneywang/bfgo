@@ -1,9 +1,29 @@
 package main
 
-//******TBLR（！！本策略不开源！！）*******
+//******【Gold Ten】*******
 //1.请手工保证帐号上的钱够！
 //2.本策略还不支持单帐号多实例等复杂场景。
 //3.策略退出时会清除所有挂单。
+
+//******【基于Order的策略框架】*******
+//1.onstart
+//   初始化各周期dataframe如dfs
+//   补最近60根k到dfs
+//2.ontick
+//   推tick到dfs
+//   捕捉行情任务运行一次，基于order的，order成交后，要明确定义止盈止损条件，形成止盈止损任务
+//   OpenTaskRunOnce(dfs)
+//   止盈止损任务运行一次，基于order的，而不是基于pos
+//   CloseTaskRunOnce(dfs)
+
+//******【基于order的task设计】******
+//1. 由于同时有多个task在运行，task都是基于技术指标驱动的，所以封装技术指标处理在一起，各个task用就行了，
+//   那个东西就叫dataframe吧
+//2. 流程:状态策略产生交易策略，交易策略产生开仓任务，开仓成交完成，产生平仓任务...
+//3. statemodel:
+//   statemodel-->ontick-->trademodel.start/stop
+//4. trademodel:
+//   opentask-->ontick/ontrade-->openorder-->closetask(s)-->ontick/ontrade-->closeorder(s)
 
 import (
 	"log"
