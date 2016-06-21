@@ -3,27 +3,6 @@ package main
 //******【Gold Ten：金十动力策略】*******
 //1.请手工保证帐号上的钱够！
 //2.本策略还不支持单帐号多实例等复杂场景。
-//3.策略退出时会清除所有挂单。
-
-//******【基于Order的策略框架】*******
-//1.onstart
-//   初始化各周期dataframe如dfs
-//   补最近60根k到dfs
-//2.ontick
-//   推tick到dfs
-//   捕捉行情任务运行一次，基于order的，order成交后，要明确定义止盈止损条件，形成止盈止损任务
-//   OpenTaskRunOnce(dfs)
-//   止盈止损任务运行一次，基于order的，而不是基于pos
-//   CloseTaskRunOnce(dfs)
-
-//******【基于order的task设计】******
-//1. 由于同时有多个task在运行，task都是基于技术指标驱动的，所以封装技术指标处理在一起，各个task用就行了，
-//   那个东西就叫dataframe吧
-//2. 流程:状态策略产生交易策略，交易策略产生开仓任务，开仓成交完成，产生平仓任务...
-//3. statemodel:
-//   statemodel-->ontick-->trademodel.start/stop
-//4. trademodel:
-//   opentask-->ontick/ontrade-->openorder-->closetask(s)-->ontick/ontrade-->closeorder(s)
 
 import (
 	"log"
@@ -32,12 +11,12 @@ import (
 import . "github.com/sunwangme/bfgo/bftraderclient"
 import . "github.com/sunwangme/bfgo/api/bfgateway"
 import . "github.com/sunwangme/bfgo/api/bfdatafeed"
-import "github.com/sunwangme/bfgo/oneywang/bar"
 
+var trader *Trader
 var dataframes DataFrames
 
 //======
-type TradeClient struct {
+type BfClient struct {
 	*BfTrderClient
 	clientId     string
 	tickHandler  bool
@@ -47,85 +26,17 @@ type TradeClient struct {
 	exchange     string
 }
 
-func buy(client *TradeClient, price float64, volume int32) string {
-	log.Printf("%v", time.Now())
-	log.Printf("To Buy: price=%10.3f vol=%d", price, volume)
-	resp, err := client.SendOrder(&BfSendOrderReq{
-		Symbol:    client.symbol,
-		Exchange:  client.exchange,
-		Price:     price,
-		Volume:    volume,
-		PriceType: BfPriceType_PRICETYPE_LIMITPRICE,
-		Direction: BfDirection_DIRECTION_LONG,
-		Offset:    BfOffset_OFFSET_OPEN})
-	if err != nil {
-		log.Fatal("Buy error")
-	}
-
-	return resp.BfOrderId
-}
-
-func sell(client *TradeClient, price float64, volume int32) string {
-	log.Printf("%v", time.Now())
-	log.Printf("To sell: price=%10.3f vol=%d", price, volume)
-	resp, err := client.SendOrder(&BfSendOrderReq{
-		Symbol:    client.symbol,
-		Exchange:  client.exchange,
-		Price:     price,
-		Volume:    volume,
-		PriceType: BfPriceType_PRICETYPE_LIMITPRICE,
-		Direction: BfDirection_DIRECTION_LONG,
-		Offset:    BfOffset_OFFSET_CLOSETODAY})
-	if err != nil {
-		log.Fatal("sell error")
-	}
-
-	return resp.BfOrderId
-}
-
-func short(client *TradeClient, price float64, volume int32) string {
-	log.Printf("%v", time.Now())
-	log.Printf("short: price=%10.3f vol=%d", price, volume)
-	resp, err := client.SendOrder(&BfSendOrderReq{
-		Symbol:    client.symbol,
-		Exchange:  client.exchange,
-		Price:     price,
-		Volume:    volume,
-		PriceType: BfPriceType_PRICETYPE_LIMITPRICE,
-		Direction: BfDirection_DIRECTION_SHORT,
-		Offset:    BfOffset_OFFSET_OPEN})
-	if err != nil {
-		log.Fatal("short error")
-	}
-	return resp.BfOrderId
-}
-
-func cover(client *TradeClient, price float64, volume int32) string {
-	log.Printf("%v", time.Now())
-	log.Printf("To cover: price=%10.3f vol=%d", price, volume)
-	resp, err := client.SendOrder(&BfSendOrderReq{
-		Symbol:    client.symbol,
-		Exchange:  client.exchange,
-		Price:     price,
-		Volume:    volume,
-		PriceType: BfPriceType_PRICETYPE_LIMITPRICE,
-		Direction: BfDirection_DIRECTION_SHORT,
-		Offset:    BfOffset_OFFSET_CLOSETODAY})
-	if err != nil {
-		log.Fatal("cover error")
-	}
-	return resp.BfOrderId
-}
-
 //======
-func (client *TradeClient) OnStart() {
+func (client *BfClient) OnStart() {
 	log.Printf("OnStart")
-	// 发出获取当前仓位请求
-	client.QueryPosition()
+	// 初始化
+	trader = NewTrader(client)
+	dataframes = make(map[BfBarPeriod]*DataFrame)
+
 	// 获取历史bar
-	for i := range bar.PeriodKeyList {
+	for i := range myPeriodKeyList {
 		// 基于tick生成Bar，并在得到完整bar时插入db
-		period := bar.PeriodKeyList[i]
+		period := myPeriodKeyList[i]
 		t := time.Now().String()
 		dataframes[period] = NewDataframe(period, t)
 		log.Printf("load histroy bars")
@@ -135,7 +46,7 @@ func (client *TradeClient) OnStart() {
 			Period:   period,
 			ToDate:   "",
 			ToTime:   "",
-			Count:    int32(SLOW_K_NUM - 1)}) //确保本策略启动后至少1分钟后才开始交易
+			Count:    int32(GOLDTEN_MIN_K_NUM - 1)}) //确保本策略启动后至少1分钟后才开始交易
 		if err != nil {
 			for i := range bars {
 				dataframes[period].AppendBar(bars[i])
@@ -144,89 +55,70 @@ func (client *TradeClient) OnStart() {
 	}
 }
 
-func (client *TradeClient) OnNotification(resp *BfNotificationData) {
+func (client *BfClient) OnNotification(resp *BfNotificationData) {
 	// 连接上gw，对于一些重要的事件，gw会发通知，便于策略控制逻辑。
 	log.Printf("OnNotification")
 	log.Printf("%v", resp)
 	// OnTradeWillBegin第一个消息
+	// 比如：发出获取当前仓位请求	client.QueryPosition()
 	// OnGotContracts第二个消息
 }
-func (client *TradeClient) OnPing(resp *BfPingData) {
+func (client *BfClient) OnPing(resp *BfPingData) {
 	log.Printf("OnPing")
 	log.Printf("%v", resp)
 }
-func (client *TradeClient) OnTick(tick *BfTickData) {
+func (client *BfClient) OnTick(tick *BfTickData) {
 	//log.Printf("OnTick")
 	//log.Printf("%v", tick)
-	for i := range bar.PeriodKeyList {
-		// 基于tick生成Bar，并在得到完整bar时插入db
-		period := bar.PeriodKeyList[i]
-		bar, hasNew := dataframes[period].AppendTick(tick)
-		if hasNew {
-			log.Printf("Insert %v bar [%s]", period, tick.TickTime)
-			log.Printf("%v", bar)
-			// TODO: 买还是卖？
-		}
-	}
 
+	// 按策略需要拼（更新）数据
+	for i := range myPeriodKeyList {
+		dataframes[myPeriodKeyList[i]].AppendTick(tick)
+	}
+	// 数据拼（更新）好了，剩下的交给策略自己去
+	trader.OnTick(&dataframes)
 }
 
-func (client *TradeClient) OnError(resp *BfErrorData) {
+func (client *BfClient) OnError(resp *BfErrorData) {
 	log.Printf("OnError")
 	log.Printf("%v", resp)
 
 }
-func (client *TradeClient) OnLog(resp *BfLogData) {
+func (client *BfClient) OnLog(resp *BfLogData) {
 	log.Printf("OnLog")
 	log.Printf("%v", resp)
 }
-func (client *TradeClient) OnTrade(resp *BfTradeData) {
+func (client *BfClient) OnTrade(resp *BfTradeData) {
 	// 挂单的成交
 	log.Printf("OnTrade")
 	log.Printf("%v", resp)
 
-	if resp.Symbol != client.symbol || resp.Exchange != client.exchange {
-		return
+	if resp.Symbol == client.symbol && resp.Exchange != client.exchange {
+		trader.OnTrade(resp)
 	}
-
-	if indexOf(_pendingOrderIds, resp.BfOrderId) == -1 {
-		// TODO：不是本策略本次运行发起的交易
-		return
-	}
-	// 按最新成交结果：1.更新orderids, 2.更新当前仓位
-	_pendingOrderIds = without(_pendingOrderIds, resp.BfOrderId)
-	updatePosition(resp.Direction, resp.Offset, resp.Volume)
 }
-func (client *TradeClient) OnOrder(resp *BfOrderData) {
+func (client *BfClient) OnOrder(resp *BfOrderData) {
 	log.Printf("OnOrder")
 	log.Printf("%v", resp)
 	// 挂单的中间状态，一般只需要在OnTrade里面处理。
 }
-func (client *TradeClient) OnPosition(resp *BfPositionData) {
+func (client *BfClient) OnPosition(resp *BfPositionData) {
 	log.Printf("OnPosition")
 	log.Printf("%v", resp)
 	// ?resp不是个数组吗？
-	if resp.Symbol == client.symbol && resp.Exchange == client.exchange {
-		initPosition(resp)
-	}
 }
-func (client *TradeClient) OnAccount(resp *BfAccountData) {
+func (client *BfClient) OnAccount(resp *BfAccountData) {
 	log.Printf("OnAccount")
 	log.Printf("%v", resp)
 }
-func (client *TradeClient) OnStop() {
+func (client *BfClient) OnStop() {
 	log.Printf("OnStop, cancle all pending orders")
-	// 退出前，把挂单都撤了
-	req := &BfCancelOrderReq{Symbol: client.symbol, Exchange: client.exchange}
-	for i := range _pendingOrderIds {
-		req.BfOrderId = _pendingOrderIds[i]
-		client.CancleOrder(req)
-	}
+	// TODO: 退出前，把挂单都撤了
 }
 
 //======
 func main() {
-	client := &TradeClient{
+	client := &BfClient{
 		BfTrderClient: NewBfTraderClient(),
 		clientId:      "DualCross",
 		tickHandler:   true,

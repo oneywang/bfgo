@@ -1,54 +1,122 @@
 package main
 
+import (
+	"log"
+	"time"
+)
 import . "github.com/sunwangme/bfgo/api/bfgateway"
 import . "github.com/sunwangme/bfgo/api/bfdatafeed"
 
-//×××××××××Readme：金十动力策略××××××××××
-//【简介】开仓后持有10周期的策略！
-//【状态】15分钟偏离60均线1%以上
-//【开仓】15分macd红/绿开仓
-//【平仓】绿/红平1/3，10周期平1/3，60均线平1/3
+// 本策略感兴趣的周期，必须是bar.PeriodKeyList的一个子集！
+var myPeriodKeyList = []BfBarPeriod{
+	BfBarPeriod_PERIOD_M15}
 
-// 本策略的交易参数常量
-const (
-	TRADE_VOLUME int32  = 1
-	VOLUME_LIMIT int32  = 5
-	FAST_K_NUM   uint32 = 15
-	SLOW_K_NUM   uint32 = 60
-)
-
-// 本策略的变量
-var _period BfBarPeriod = BfBarPeriod_PERIOD_M01
-var _historyBarsGot bool = false
-var _barsCount uint32 = 0
-var _currentBarMinute uint32 = 0
-var _fastMa, _slowMa []float64
-var _fastMa0, _fastMa1, _slowMa0, _slowMa1 float64 = 0, 0, 0, 0
-var _positionLong, _positionShort int32 = 0, 0
-var _pendingOrderIds []string
-
-func initPosition(position *BfPositionData) {
-	if _positionLong > 0 || _positionShort > 0 {
-		// already inited
-		return
-	}
-	if position.Direction == BfDirection_DIRECTION_LONG {
-		_positionLong += position.Position
-	} else if position.Direction == BfDirection_DIRECTION_SHORT {
-		_positionShort += position.Position
-	}
+type Trader struct {
+	client *BfClient
 }
 
-func updatePosition(direction BfDirection, offset BfOffset, volume int32) {
-	if direction == BfDirection_DIRECTION_LONG && offset == BfOffset_OFFSET_OPEN {
-		_positionLong += volume
-	} else if direction == BfDirection_DIRECTION_LONG && offset == BfOffset_OFFSET_CLOSE {
-		_positionLong -= volume
-	} else if direction == BfDirection_DIRECTION_SHORT && offset == BfOffset_OFFSET_OPEN {
-		_positionShort += volume
-	} else if direction == BfDirection_DIRECTION_SHORT && offset == BfOffset_OFFSET_CLOSE {
-		_positionShort -= volume
+func NewTrader(client *BfClient) *Trader {
+	return &Trader{client: client}
+}
+func (*Trader) PeriodKeyList() []BfBarPeriod {
+	return myPeriodKeyList
+}
+func (*Trader) OnTick(*DataFrames) {
+	//×××××××××金十动力策略××××××××××
+	//【简介】开仓后持有10周期的策略！
+	//【状态】15分钟偏离60均线1%以上
+	//【开仓】15分macd红/绿开仓
+	//【平仓】绿/红平1/3，10周期平1/3，60均线平1/3
+}
+func (*Trader) OnTrade(*BfTradeData) {
+}
+
+// Order方向分：开仓，平仓
+type DirectionType int
+
+const (
+	DIRECTION_OPEN  DirectionType = 0
+	DIRECTION_CLOSE DirectionType = 1
+)
+
+type Task struct {
+	order    *BfSendOrderReq
+	position *BfPositionData
+	t        DirectionType
+}
+
+func NewTask10pOpen(order *BfSendOrderReq, position *BfPositionData) *Task {
+	return &Task{order: order, position: position, t: DIRECTION_OPEN}
+}
+
+func buy(client *BfClient, price float64, volume int32) string {
+	log.Printf("%v", time.Now())
+	log.Printf("To Buy: price=%10.3f vol=%d", price, volume)
+	resp, err := client.SendOrder(&BfSendOrderReq{
+		Symbol:    client.symbol,
+		Exchange:  client.exchange,
+		Price:     price,
+		Volume:    volume,
+		PriceType: BfPriceType_PRICETYPE_LIMITPRICE,
+		Direction: BfDirection_DIRECTION_LONG,
+		Offset:    BfOffset_OFFSET_OPEN})
+	if err != nil {
+		log.Fatal("Buy error")
 	}
+
+	return resp.BfOrderId
+}
+
+func sell(client *BfClient, price float64, volume int32) string {
+	log.Printf("%v", time.Now())
+	log.Printf("To sell: price=%10.3f vol=%d", price, volume)
+	resp, err := client.SendOrder(&BfSendOrderReq{
+		Symbol:    client.symbol,
+		Exchange:  client.exchange,
+		Price:     price,
+		Volume:    volume,
+		PriceType: BfPriceType_PRICETYPE_LIMITPRICE,
+		Direction: BfDirection_DIRECTION_LONG,
+		Offset:    BfOffset_OFFSET_CLOSETODAY})
+	if err != nil {
+		log.Fatal("sell error")
+	}
+
+	return resp.BfOrderId
+}
+
+func short(client *BfClient, price float64, volume int32) string {
+	log.Printf("%v", time.Now())
+	log.Printf("short: price=%10.3f vol=%d", price, volume)
+	resp, err := client.SendOrder(&BfSendOrderReq{
+		Symbol:    client.symbol,
+		Exchange:  client.exchange,
+		Price:     price,
+		Volume:    volume,
+		PriceType: BfPriceType_PRICETYPE_LIMITPRICE,
+		Direction: BfDirection_DIRECTION_SHORT,
+		Offset:    BfOffset_OFFSET_OPEN})
+	if err != nil {
+		log.Fatal("short error")
+	}
+	return resp.BfOrderId
+}
+
+func cover(client *BfClient, price float64, volume int32) string {
+	log.Printf("%v", time.Now())
+	log.Printf("To cover: price=%10.3f vol=%d", price, volume)
+	resp, err := client.SendOrder(&BfSendOrderReq{
+		Symbol:    client.symbol,
+		Exchange:  client.exchange,
+		Price:     price,
+		Volume:    volume,
+		PriceType: BfPriceType_PRICETYPE_LIMITPRICE,
+		Direction: BfDirection_DIRECTION_SHORT,
+		Offset:    BfOffset_OFFSET_CLOSETODAY})
+	if err != nil {
+		log.Fatal("cover error")
+	}
+	return resp.BfOrderId
 }
 
 func indexOf(a []string, v string) int {
