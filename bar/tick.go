@@ -101,7 +101,7 @@ func isSamePeriodTime(previous string, current string, period BfBarPeriod) bool 
 }
 
 // 用Tick数据构造一个新Bar并返回
-func constructBarFromTick(t *BfTickData, period BfBarPeriod) *BfBarData {
+func NewBarFromTick(t *BfTickData, period BfBarPeriod) *BfBarData {
 	b := &BfBarData{Period: period}
 	b.Symbol = t.Symbol
 	b.Exchange = t.Exchange
@@ -133,18 +133,6 @@ func updateBarFromTick(b *BfBarData, t *BfTickData) {
 	b.LastVolume += t.LastVolume
 }
 
-// 保存bar所用的核心数据结构
-type BarSlice map[BfBarPeriod]*BfBarData
-type Converter struct {
-	// 不同品种当前的1分钟K线
-	data map[string]*BarSlice
-}
-
-func NewConverter() *Converter {
-	r := &Converter{data: make(map[string]*BarSlice)}
-	return r
-}
-
 // 将tick更新到传入的某周期的bar
 // 返回值
 // bool：是否新周期开始
@@ -153,7 +141,7 @@ func UpdateTick2Bar(tick *BfTickData, bar *BfBarData) (*BfBarData, bool) {
 	var ret *BfBarData = nil
 	isSamePeriod := true
 
-	if tick == nil || bar == nil || bar.Symbol != tick.Symbol || bar.Exchange != tick.Symbol {
+	if tick == nil || bar == nil || bar.Symbol != tick.Symbol || bar.Exchange != tick.Exchange {
 		panic("illegal param")
 	}
 
@@ -173,55 +161,8 @@ func UpdateTick2Bar(tick *BfTickData, bar *BfBarData) (*BfBarData, bool) {
 	} else {
 		// 新的周期开始，需要生成新周期的bar返回
 		// 用tick初始化一个新的currentBar
-		ret = constructBarFromTick(tick, period)
+		ret = NewBarFromTick(tick, period)
 	}
 
 	return ret, !isSamePeriod
-}
-
-// 将tick保存到Converter内置的某周期的bar
-// 返回值
-// bool：是否新周期开始
-// *BfBarData：如果新周期开始，返回的是上一周期的bar；否则是更新后的老bar
-func (p *Converter) SaveTick2Bar(tick *BfTickData, period BfBarPeriod) (*BfBarData, bool) {
-	var ret *BfBarData = nil
-	isNewPeriod := false
-
-	id := tick.Symbol + "@" + tick.Exchange
-	d, ok := p.data[id]
-	if !ok {
-		// 这个品种第一次赋值&1分钟的第一次赋值，生成barSlice
-		var bs BarSlice = make(map[BfBarPeriod]*BfBarData)
-		p.data[id] = &bs
-		d = &bs
-	}
-
-	if storedBar, ok := (*d)[period]; !ok {
-		// 这个周期的bar第一次赋值
-		ret = constructBarFromTick(tick, period)
-		(*d)[period] = ret
-	} else {
-		// 判断是否新的周期
-		isSamePeriod := true
-		if period == BfBarPeriod_PERIOD_D01 {
-			isSamePeriod = storedBar.ActionDate == tick.ActionDate
-		} else if period == BfBarPeriod_PERIOD_W01 {
-			panic("TODO: WEEK BAR not support")
-		} else {
-			isSamePeriod = isSamePeriodTime(storedBar.BarTime, ticktime2Bartime(tick.TickTime, period), period)
-		}
-
-		if isSamePeriod {
-			// 还在同一个周期中，更新即可
-			updateBarFromTick(storedBar, tick)
-		} else {
-			// 新的周期开始，需要返回这个完整bar以便插入db，同时生成新周期的bar
-			isNewPeriod = true
-			// 用tick初始化一个新的currentBar
-			(*d)[period] = constructBarFromTick(tick, period)
-		}
-		ret = storedBar
-	}
-
-	return ret, isNewPeriod
 }

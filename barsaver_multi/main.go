@@ -21,7 +21,7 @@ type DataRecorder struct {
 	logHandler   bool
 	symbol       string
 	exchange     string
-	converter    *bar.Converter
+	saver        *Saver
 }
 
 func insertContracts(client *DataRecorder) {
@@ -60,14 +60,11 @@ func (client *DataRecorder) OnTick(tick *BfTickData) {
 	//
 	client.InsertTick(tick)
 
-	// 计算K线
-
-	// tickDatetime = datetime.strptime(tick.actionDate+tick.tickTime,"%Y%m%d%H:%M:%S.%f")
-
+	// 计算K线 & save
 	for i := range bar.PeriodKeyList {
 		// 基于tick生成Bar，并在得到完整bar时插入db
 		period := bar.PeriodKeyList[i]
-		if bar, needInsert := client.converter.SaveTick2Bar(tick, period); needInsert {
+		if bar, needInsert := client.saver.SaveTick2Bar(tick, period); needInsert {
 			log.Printf("Insert %v bar [%s]", period, tick.TickTime)
 			log.Printf("%v", bar)
 			client.InsertBar(bar)
@@ -115,7 +112,7 @@ func main() {
 		logHandler:    false,
 		symbol:        "*", //rb1610",
 		exchange:      "*", //"SHFE",
-		converter:     bar.NewConverter()}
+		saver:         NewSaver()}
 
 	BfRun(client,
 		client.clientId,
