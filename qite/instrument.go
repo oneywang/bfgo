@@ -15,6 +15,7 @@ func (i Instrument) Equal(u Instrument) bool {
 	return i.Symbol == u.Symbol && i.Exchange == u.Exchange
 }
 
+// 数据库中存着的品种详情，可通过symbol索引到
 type InstrumentManager struct {
-	intruments []Instrument
+	intruments map[string]Instrument
 }
