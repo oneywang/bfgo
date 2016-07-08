@@ -4,6 +4,12 @@ package main
 //1.请手工保证帐号上的钱够！
 //2.本策略还不支持单帐号多实例等复杂场景。
 
+//数据流程：
+//1 每天收盘后5点整理datafeed，包含1天的tick 5天的1分 30天的5分 所有的日线；计算出5天的3分 30天的15分的数据；tick数据由datarecorder提供，用于做回放模拟交易；分钟和日线数据由第三方提供，用于初始化策略
+//2 开盘前，运行ctpgateway datafeed datarecorder，收集tick；用于策略补tick和回放模拟交易
+//3 开盘前/后，运行策略，先补各周期120根bar初始化dataframe，然后补当天的tick继续初始化dataframe。注意：盘中中断后，策略重新运行逻辑和盘前运行都是一样的。
+//4 ontick驱动dataframe，开始基于dataframe驱动状态策略和交易策略
+
 import (
 	"log"
 	"time"
@@ -11,9 +17,10 @@ import (
 import . "github.com/sunwangme/bfgo/bftraderclient"
 import . "github.com/sunwangme/bfgo/api/bfgateway"
 import . "github.com/sunwangme/bfgo/api/bfdatafeed"
+import "github.com/oneywang/bfgo/qite"
 
 var trader *Trader
-var dataframes DataFrames
+var dataframes qite.DataFrames
 
 //======
 type BfClient struct {
@@ -31,26 +38,27 @@ func (client *BfClient) OnStart() {
 	log.Printf("OnStart")
 	// 初始化
 	trader = NewTrader(client)
-	dataframes = make(map[BfBarPeriod]*DataFrame)
+	dataframes = make(map[BfBarPeriod]*qite.BarSeries)
 
 	// 获取历史bar
-	for i := range myPeriodKeyList {
+	for _, period := range myPeriodKeyList {
 		// 基于tick生成Bar，并在得到完整bar时插入db
-		period := myPeriodKeyList[i]
 		t := time.Now().String()
-		dataframes[period] = NewDataframe(period, t)
+		dataframes[period] = qite.NewBarSeries(period, t)
 		log.Printf("load histroy bars")
 		bars, err := client.GetBar(&BfGetBarReq{
 			Symbol:   client.symbol,
 			Exchange: client.exchange,
 			Period:   period,
-			ToDate:   "",
-			ToTime:   "",
-			Count:    int32(GOLDTEN_MIN_K_NUM - 1)}) //确保本策略启动后至少1分钟后才开始交易
+			ToDate:   "20160606",
+			ToTime:   "22:35:00",
+			Count:    int32(qite.GOLDTEN_MIN_K_NUM - 1)}) //确保本策略启动后至少1分钟后才开始交易
 		if err != nil {
-			for i := range bars {
-				dataframes[period].AppendBar(bars[i])
-			}
+			log.Printf("Error loading histroy bars: %v", err)
+		}
+		log.Printf("bars: %v", len(bars))
+		for _, v := range bars {
+			dataframes[period].AppendBar(v)
 		}
 	}
 }
@@ -68,8 +76,8 @@ func (client *BfClient) OnPing(resp *BfPingData) {
 	log.Printf("%v", resp)
 }
 func (client *BfClient) OnTick(tick *BfTickData) {
-	//log.Printf("OnTick")
-	//log.Printf("%v", tick)
+	log.Printf("OnTick")
+	log.Printf("%v", tick)
 
 	// 按策略需要拼（更新）数据
 	for i := range myPeriodKeyList {
@@ -126,6 +134,8 @@ func main() {
 		logHandler:    false,
 		symbol:        "rb1610",
 		exchange:      "SHFE"}
+
+	qite.CurrentFramework.SetClient(client.BfTrderClient)
 
 	BfRun(client,
 		client.clientId,

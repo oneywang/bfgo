@@ -6,47 +6,97 @@ import (
 )
 import . "github.com/sunwangme/bfgo/api/bfgateway"
 import . "github.com/sunwangme/bfgo/api/bfdatafeed"
+import "github.com/oneywang/bfgo/qite"
+
+// 任一策略对当前周期的趋势方向判断结果有三：上升，下跌，震荡
+type TrendStateType int
+
+const (
+	TRENDSTATE_BULL   TrendStateType = 0
+	TRENDSTATE_BEAR   TrendStateType = 1
+	TRENDSTATE_MONKEY TrendStateType = 2
+)
+
+// 判断a线是否上穿b线
+func CrossUp(a0, a1, b0, b1 float64) bool {
+	return a0 < b0 && a1 > b1
+}
+
+// 判断a线是否下穿b线
+func CrossDown(a0, a1, b0, b1 float64) bool {
+	return a0 > b0 && a1 < b1
+}
+
+//【状态】15分钟K的当前趋势状态：偏离60均线1%以上算BULL，以下算BEAR
+func M15State(d *qite.BarSeries) TrendStateType {
+	// TODO:
+	return TRENDSTATE_MONKEY
+}
 
 // 本策略感兴趣的周期，必须是bar.PeriodKeyList的一个子集！
 var myPeriodKeyList = []BfBarPeriod{
-	BfBarPeriod_PERIOD_M15}
+	BfBarPeriod_PERIOD_M05} //TODO: M15
 
 type Trader struct {
-	client *BfClient
+	client        *BfClient
+	opener        *OpenTask
+	closer1       *CloseTask
+	closer2       *CloseTask
+	closer3       *CloseTask
+	pendingOrders []string
 }
 
 func NewTrader(client *BfClient) *Trader {
-	return &Trader{client: client}
+	t := &Trader{client: client}
+	//TODO:
+	t.opener = NewTask10pOpen(t, "15分macd红/绿开仓", 5)
+	t.closer1 = NewTask10pClose("红变绿/绿变红平1/3")
+	t.closer1 = NewTask10pClose("10周期平1/3")
+	t.closer1 = NewTask10pClose("穿60均线平1/3")
+	return t
 }
 func (*Trader) PeriodKeyList() []BfBarPeriod {
 	return myPeriodKeyList
 }
-func (*Trader) OnTick(*DataFrames) {
+
+func (p *Trader) OnTick(dataframes *qite.DataFrames) {
 	//×××××××××金十动力策略××××××××××
 	//【简介】开仓后持有10周期的策略！
+	bars := (*dataframes)[BfBarPeriod_PERIOD_M15]
+	if !bars.Enough() {
+		log.Print("Not enough bars")
+		return
+	}
 	//【状态】15分钟偏离60均线1%以上
+	M15State(bars)
 	//【开仓】15分macd红/绿开仓
+	p.opener.Run(bars)
 	//【平仓】绿/红平1/3，10周期平1/3，60均线平1/3
-}
-func (*Trader) OnTrade(*BfTradeData) {
-}
-
-// Order方向分：开仓，平仓
-type DirectionType int
-
-const (
-	DIRECTION_OPEN  DirectionType = 0
-	DIRECTION_CLOSE DirectionType = 1
-)
-
-type Task struct {
-	order    *BfSendOrderReq
-	position *BfPositionData
-	t        DirectionType
+	p.closer1.Run(bars)
+	p.closer2.Run(bars)
+	p.closer3.Run(bars)
 }
 
-func NewTask10pOpen(order *BfSendOrderReq, position *BfPositionData) *Task {
-	return &Task{order: order, position: position, t: DIRECTION_OPEN}
+func (p *Trader) Buy(price float64, vol int32) string {
+	orderid := buy(p.client, price, vol)
+	p.pendingOrders = append(p.pendingOrders, orderid)
+	return orderid
+}
+
+func (p *Trader) Short(price float64, vol int32) string {
+	orderid := short(p.client, price, vol)
+	p.pendingOrders = append(p.pendingOrders, orderid)
+	return orderid
+}
+
+func (p *Trader) OnTrade(resp *BfTradeData) {
+	if indexOf(p.pendingOrders, resp.BfOrderId) == -1 {
+		// TODO：不是本策略本次运行发起的交易
+		return
+	}
+	// 按最新成交结果：1.更新orderids, 2.更新当前仓位
+	p.pendingOrders = without(p.pendingOrders, resp.BfOrderId)
+	updatePosition(resp.Direction, resp.Offset, resp.Volume)
 }
 
 func buy(client *BfClient, price float64, volume int32) string {
